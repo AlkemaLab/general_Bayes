@@ -1,0 +1,78 @@
+```{r} 
+options(digitis = 3)
+options(scipen = 10^5)
+options(help_type = "html")
+
+library(haven)
+library(tidyverse)
+library(parallel)
+source("R/princeB.r")
+```
+
+
+get DHS data
+```{r}
+dhs <- readRDS("data/dhs_mock.rds")
+dim(dhs)
+colnames(dhs)
+```
+
+(re) fit the propensity to be in the 4 intervention cities
+to the soruce data and then compute in the DHS data
+```{r}
+sdt <- readRDS("data/from_source_study/df.rds")
+in_dhs <- colnames(sdt)[colnames(sdt) %in% colnames(dhs)]
+
+sdt <-
+  sdt %>%
+  filter(anymodern_ever == 0 & anymodern_now == 0) %>%
+  select(all_of(in_dhs), Z) %>%
+  select(!c(anymodern_ever, anymodern_now))
+
+set.seed(0203)
+me <- bart2(Z ~ .
+  , data = sdt
+  , n.trees = 75L
+  , k = 2
+  , keepTrees = TRUE
+)
+sort(- apply(me$varcount, 3, mean))
+invisible(me$fit$state)
+saveRDS(me, "data/from_source_study/propensity_bart.rds")
+
+
+dhs$e <- apply(predict(me, newdata = dhs, type = "bart"), 2, mean)
+summary(dhs$e)
+```
+
+
+predict counterfactual oucomes for DHS respondents
+Base on BART trees fit to source study 
+Here we use 4k trees, in the article 10K trees were used
+```{r}
+pred <- lapply(1:4, \(i) {
+  stree <- readRDS(paste0("data/from_source_study/tree_", i, ".rds"))
+  tail(stree)
+
+  scaled_x <- dhs %>%
+    #rename(knwl_contraception_noprobe = knwl_contraception) %>%
+    select(all_of(names(attr(stree, "scaled:center")))) %>%
+    scale(attr(stree, "scaled:center"), attr(stree, "scaled:scale"))
+
+  y0 <- predict(subset(stree, m == "y0co"), scaled_x, n_cores = 6)
+  y1 <- predict(subset(stree, m == "y1co"), scaled_x, n_cores = 6)
+  list(y0 = y0, y1 = y1)
+})
+
+
+y0 <- lapply(pred, \(x) x$y0) %>% bind_cols
+dim(y0)
+
+y1 <- lapply(pred, \(x) x$y1) %>% bind_cols
+dim(y1)
+
+dhs$y1 <- y1
+dhs$y0 <- y0
+
+saveRDS(dhs, paste0("data/dhs_plus_mock.rds"))
+```

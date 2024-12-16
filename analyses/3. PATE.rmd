@@ -1,0 +1,39 @@
+```{r} 
+options(digitis = 3)
+options(scipen = 10^5)
+options(help_type = "html")
+
+library(tidyverse)
+source("R/generalB.r")
+source("R/princeB.r")
+library(gt)
+library(parallel)
+```
+
+get DHS-pate 
+```{r}
+dhs <- readRDS("data/dhs_plus_mock.rds")
+
+# Define populaiton of intrest
+#' woman residing in urban Nigeria
+#' who have not used modern contraception
+#' (i.e., the inclusion criteria for chapter 2) and
+#' wish to avoid or delay pregnancy
+#' (i.e., may benefit from adopting modern contraceptives).
+dhs$sp <-
+  dhs$anymodern_ever == 0 &
+  dhs$anymodern_now == 0 &
+  dhs$want_no_birth == 1
+
+mean(dhs$sp)
+weighted.mean(dhs$sp, dhs$wt)
+```
+
+```{r}
+# all
+gen_b(with(dhs, y1 - y0), dhs$sp == 1)
+# Urban
+gen_b(with(dhs, y1 - y0), dhs$sp == 1 & dhs$urban == 1)
+# Urban, same states
+gen_b(with(dhs, y1 - y0), dhs$sp == 1 & dhs$urban == 1 & dhs$in5states == 1)
+```

@@ -1,0 +1,340 @@
+```{r} 
+options(digitis = 3)
+options(scipen = 10^5)
+options(help_type = "html")
+library(haven)
+library(tidyverse)
+```
+
+
+Women data
+(mock data https://dhsprogram.com/data/model-datasets.cfm)
+```{r} 
+dt <-  read_dta("data/ZZIR62FL.DTA")
+dim(dt)
+
+#design variables
+attr(dt$v005, "label")
+dt$wt <- dt$v005 / 1000000
+attr(dt$v021, "label")
+dt$psu <- dt$v021
+attr(dt$v022, "label")
+dt$str <- dt$v022
+length(unique(dt$psu))
+with(dt, tapply(psu, str, \(x) length(unique(x))))
+dt$hhid <- dt$v021 * 1000 + dt$v002
+
+```
+
+```{r} 
+#urban
+attr(dt$v025, "labels")
+dt$urban <- as.numeric(dt$v025 == 1)
+
+### !!!state!!!
+#' the (the mock data does not have state variable)
+# we use region 1, instead
+attr(dt$v024, "labels")
+tapply(dt$v024, dt$wealth, mean)
+dt$in5states <- as.numeric(dt$v024 == 1)
+# with real data, use commented code below instead
+#attr(dt$str, "labels")
+#the_5_states <- c("aduna", "abuja", "kwara", "oyo", "edo") %>%
+#  lapply(\(x) grep(x, names(attr(dt$str, "labels")))) %>%
+#  unlist
+#dt$in5states <- as.numeric(dt$str %in% the_5_states)
+
+```
+
+
+Age & education
+```{r} 
+####Age	 26.8 	 28.2 	 27.9 	 27.2 	 27.4 	 27.3 
+# Age
+attr(dt$v012, "label")
+summary(dt$v012)
+dt$age <- dt$v012
+summary(dt$age)
+
+
+# Current age in 5-year groups is produced by grouping V012.
+attr(dt$v013, "label")
+attr(dt$v013, "labels")
+summary(dt$v013)
+age_glab <- paste("age", seq(15, 49, 5), seq(19, 49, 5), sep = "_")
+dt[, age_glab] <- fastDummies::dummy_cols(dt$v013
+  , remove_selected_columns = TRUE
+)
+
+###Education	 3.7 	 3.6 	 3.2 	 3.2 	 3.6 	 2.5 
+#highest attended
+attr(dt$v106, "label")
+attr(dt$v106, "labels")
+table(dt$v106, useNA = "ifany")
+
+attr(dt$v107, "label")
+attr(dt$v107, "labels")
+
+dt$no_edu <- as.numeric(dt$v106 == 0)
+dt$edu_primary  <- as.numeric(dt$v106 == 1)
+# there are 5 cases with missing years in the mock data only
+dt$v107[dt$v106 == 2 & is.na(dt$v107)] <- 0 
+dt$edu_junioHS  <- as.numeric(dt$v106 == 2  & dt$v107 <= 3)
+dt$edu_seniorHS  <- as.numeric(dt$v106 == 2 & dt$v107 > 3)
+dt$edu_higher  <- as.numeric(dt$v106 == 3)
+
+dt$education <- as.matrix(select(dt, no_edu:edu_higher)) %*% c(0, 2:5)
+dt$education <- as.integer(dt$education)
+summary(dt$education)
+
+round(prop.table(table(dt$education)), 2)
+```
+
+Wealth
+we use quantiles with respect to urban
+```{r} 
+###Wealth (across city)	 3.6 	 2.9 	 2.9 	 3.5 	 3.1 	 2.5
+attr(dt$v190, "label")
+attr(dt$v190, "labels")
+round(prop.table(table(dt$v190)), 2)
+
+attr(dt$v191, "label")
+summary(dt$v191)
+q <- with(
+  subset(dt, urban == 1 & in5states == 1)
+  , quantile(v191, seq(0.2, .8, .2), na.rm = TRUE)
+)
+q <- c(-Inf, q, Inf)
+boxplot(dt$v191 ~ cut(dt$v191, q, include.lowest = TRUE))
+boxplot(dt$v191 ~ dt$v190)
+
+dt$wealth <- as.numeric(cut(dt$v191, q, include.lowest = TRUE))
+table(dt$wealth, useNA = "ifany")
+boxplot(dt$v191 ~ dt$wealth)
+dt[, paste("wealth", 1:5, sep= "_")] <- fastDummies::dummy_cols(dt$wealth
+  , remove_selected_columns = TRUE
+)
+
+round(prop.table(table(dt$wealth)), 2)
+```
+
+
+Parity & Teen birth 
+```{r} 
+###Parity	 1.481 	 1.742 	 2.044 	 2.431 	 1.457 	 3.460 
+#Total number of children ever born.
+attr(dt$v201, "label")
+summary(dt$v201)
+dt$parity <- dt$v201
+
+dt[, paste("parity", 0:7, sep = "_")] <-
+  ifelse(dt$parity > 7, 7, dt$parity) %>%
+  fastDummies::dummy_cols(remove_selected_columns = TRUE)
+
+summary(dt$parity)
+
+###Teen birth	 0.080 	 0.059 	 0.083 	 0.192 	 0.049 	 0.373 
+#Age of the respondent at first birth is calculated from the CMC of the date of first birth and the CMC of the date of birth of the respondent.
+#BASE: All respondents with one or more births (V201 > 0).
+attr(dt$v212, "label")
+table(dt$parity, dt$v212>0, useNA = "ifany")
+dt$teen_birth <- as.numeric(dt$v212 < 18)
+dt$teen_birth[is.na(dt$teen_birth)] <- 0
+mean(dt$teen_birth)
+
+###Never married	 0.452 	 0.378 	 0.357 	 0.449 	 0.504 	 0.277 
+###In union	 0.516 	 0.594 	 0.629 	 0.474 	 0.442 	 0.687 
+###Separated/widowed	 0.028 	 0.025 	 0.014 	 0.035 	 0.049 	 0.724
+attr(dt$v502, "label")
+attr(dt$v502, "labels")
+summary(dt$v502)
+
+dt$never_married <- as.numeric(dt$v502 == 0)
+dt$in_union      <- as.numeric(dt$v502 == 1)
+dt$separated     <- as.numeric(dt$v502 == 2)
+
+mean(dt$never_married)
+mean(dt$in_union)
+mean(dt$separated)
+
+
+#Whether the respondent is currently, formerly or never married (or lived with a partner).
+#Currently married includes married women and women living with a partner, and 
+#formerly married includes widowed, divorced, separated women and women who have lived with a partner but are not now living with a partner
+```
+
+Sexual acitivty, religion, work
+```{r} 
+###Sexually active	 0.585 	 0.668 	 0.706 	 0.612 	 0.568 	 0.033
+attr(dt$v525, "label")
+attr(dt$v525, "labels")
+table(dt$v525, useNA = "ifany")
+
+dt$had_sex     <- as.numeric(dt$v525 > 0 & dt$v525 < 90 & !is.na(dt$v525))
+mean(dt$had_sex)
+mean(dt$age)
+
+#Age at first sexual intercourse. Respondents who had never had sex are coded 0. 
+
+#Muslim	 0.271 	 0.531 	 0.775 	 0.735 	 0.037 	 0.907 
+#Christian	 0.725 	 0.467 	 0.221 	 0.251 	 0.919 	 0.090 
+attr(dt$v130, "label")
+attr(dt$v130, "labels")
+table(dt$v130, useNA = "ifany")
+dt$Christian <- as.numeric(dt$v130 %in% 1:2)
+dt$Muslim <- as.numeric(dt$v130 %in% 3)
+mean(dt$Christian)
+mean(dt$Muslim)
+
+###Work last year	 0.409 	 0.612 	 0.564 	 0.270 	 0.408 	 0.573 
+attr(dt$v731, "label")
+attr(dt$v731, "labels")
+table(dt$v731, useNA = "ifany")
+dt$work_last_year <- as.numeric(dt$v731 == 1 & !is.na(dt$v731))
+mean(dt$work_last_year)
+
+
+###Work last week	 0.342 	 0.524 	 0.473 	 0.341 	 0.334 	 0.398 
+attr(dt$v714, "label")
+attr(dt$v714, "labels")
+dt$work_last_week <- as.numeric(dt$v714 == 1 & !is.na(dt$v714))
+mean(dt$work_last_week)
+
+
+###For cash only	 0.369 	 0.576 	 0.498 	 0.256 	 0.369 	 0.537 
+attr(dt$v741, "label")
+attr(dt$v741, "labels")
+dt$paid_cash <- as.numeric(dt$v741 == 1)
+dt$paid_cash[is.na(dt$paid_cash)] <- 0
+mean(dt$paid_cash)
+
+
+###Self-employed	 0.224 	 0.433 	 0.442 	 0.173 	 0.307 	 0.516
+#Whether the respondent works for a family member, for someone else or is self-employed.
+attr(dt$v719, "label")
+attr(dt$v719, "labels")
+dt$self_employed <- as.numeric(dt$v719 == 3)
+dt$self_employed[is.na(dt$self_employed)] <- 0
+mean(dt$self_employed)
+
+###Exposed to generic TV	 0.407 	 0.317 	 0.171 	 0.284 	 0.481 	 0.211 
+###Exposed to generic RDO	 0.357 	 0.391 	 0.442 	 0.235 	 0.340 	 0.595
+#Whether the respondent has heard about family planning in the last few months from any of the following sources
+summary(dt$v384a) # radio
+summary(dt$v384b) #TV
+attr(dt$v384a, "label")
+attr(dt$v384a, "labels")
+attr(dt$v384b, "label")
+attr(dt$v384b, "labels")
+
+dt$FP_radio <- as.numeric(!(dt$v384a == 0 | is.na(dt$v384a)))
+dt$FP_TV <- as.numeric(!(dt$v384b == 0 | is.na(dt$v384b)))
+mean(dt$FP_radio)
+mean(dt$FP_TV)
+```
+
+
+Contraceptive knowlege and attitudes
+```{r} 
+###Knowledge of MODERN contraception	 0.580 	 0.766 	 0.653 	 0.460 	 0.755 	 0.588 
+attr(dt$v301, "label")
+attr(dt$v301, "labels")
+table(dt$v301)
+mean(dt$v301 == 3)
+dt$knwl_contraception <- as.numeric(dt$v301 == 3)
+mean(dt$knwl_contraception)
+
+
+
+#Desire for more children is a constructed variable classifying respondents who 
+#want more children by whether they want the next child soon (less than 2 years) or 
+#they want the next child later (2+ years)
+attr(dt$v605, "label")
+attr(dt$v605, "labels")
+table(dt$v605, useNA = "ifany")
+table(as.numeric(dt$v605 %in% c(2, 5)))
+dt$want_no_birth <- as.numeric(dt$v605 %in% c(2, 5))
+mean(dt$want_no_birth)
+
+
+
+#Ever use
+# Ever used anything or tried to delay or avoid getting pregnant.
+# This variable was added to replace variable V302,
+# which is no longer part of the DHS VII core questionnaire
+# where the questions on ever use by method
+# are no longer part of the contraceptive table.
+attr(dt$v301, "label")
+attr(dt$v301, "labels")
+
+attr(dt$v302a, "label") #Q 313, 314
+attr(dt$v302a, "labels")
+
+dt$anymodern_ever <- as.numeric(dt$v302a > 0) * as.numeric(dt$v301 == 3)
+mean(dt$anymodern_ever)
+
+#Current use
+attr(dt$v313, "label")
+attr(dt$v313, "labels")
+dt$anymodern_now <- as.numeric(dt$v313 == 3)
+table(dt$anymodern_ever, dt$anymodern_now)
+mean(dt$anymodern_now)
+
+```
+
+Attitudes
+```{r} 
+###Has own money	 0.553 	 0.583 	 0.550 	 0.424 	 0.447 	 0.642 
+###Self-efficacy to obtain	 0.754 	 0.667 	 0.573 	 0.493 	 0.754 	 0.404 
+###Attitude: safety	 0.487 	 0.335 	 0.491 	 0.233 	 0.372 	 0.432 
+###Attitude: autonomous use	 0.281 	 0.180 	 0.098 	 0.088 	 0.339 	 0.108 
+
+###Attitude: wife beating
+summary(dt[, paste0("v744", letters[1:5])])
+attr(dt$v744a, "label")
+attr(dt$v744a, "labels")
+
+dt$att_beat_ok <- apply(dt[, paste0("v744", letters[1:5])], 1, sum, na.rm =TRUE) > 0
+mean(dt$att_beat_ok)
+
+```
+Item V364: Contraceptive use and intention
+Item V624: Unmet need
+Item V626: Unmet need (definition 2)
+Item V626A: Unmet need for contraception (definition 3)
+```{r}
+attr(dt$v364, "label")
+attr(dt$v364, "labels")
+table(dt$v364, useNA = "ifany")
+
+dt$intetn_to_use <- as.numeric(dt$v364 == 3)
+mean(dt$intetn_to_use)
+
+attr(dt$v624, "label")
+attr(dt$v626, "label")
+attr(dt$v626a, "label")
+attr(dt$v624, "labels")
+attr(dt$v626, "labels")
+attr(dt$v626a, "labels")
+
+dt$need <- as.numeric(dt$v624 %in% c(1, 2))
+mean(dt$need)
+#Exposure status (definition 2) reclassifies variable V623,
+# using a more liberal definition of infecundity.
+dt$need2 <- as.numeric(dt$v626 %in% c(1, 2))
+mean(dt$need2)
+#revised definition of unmet need for contraception (2012)
+dt$need3 <- as.numeric(dt$v626a %in% c(1, 2))
+mean(dt$need3)
+```
+
+```{r} 
+dt %>%
+  select(wt:need3) %>%
+  summary()
+
+dt <- dt %>%
+  select(wt:need3)
+
+saveRDS(dt, "data/dhs_mock.rds")
+```

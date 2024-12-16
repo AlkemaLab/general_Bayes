@@ -1,0 +1,150 @@
+```{r}
+options(digitis = 3)
+options(scipen = 10^5)
+options(help_type = "html")
+
+library(haven)
+library(tidyverse)
+library(parallel)
+
+library(sampling)
+library(survey)
+source("R/generalB.r")
+```
+
+
+```{r}
+dt <- readRDS("data/dhs_mock.rds")
+dt <- dt[dt$in5states == 0, ]
+dt <- select(dt, age, str, psu, wt)
+length(unique(dt$psu))
+```
+
+
+Assumes empirical P(x) from DHS sample *is* the population
+Takes a 2-stage cluster sample from that population
+At the frist stage, clusters are sample with PPS
+At the second stage, invividuals within a cluster are sampeled with SRS
+
+```{r}
+pps <- \(size, n_psu, sf = .01) 1 - (1 - size / sum(size) * sf)^n_psu
+pp <- \(n, sf = .01) rep(1 - (1 - 1 / n * sf)^n, n)
+
+
+sim_sdt <- \(
+  fc  =  1
+) {
+  lapply(unique(dt$str), \(s) {
+    sdt   <- dt[dt$str == s, ]
+    size  <- tapply(sdt$age, sdt$psu, mean)
+    psu   <- unique(sdt$psu)
+    n_psu <- length(psu) * fc
+    p <- pps(size, n_psu)
+    names(p) <- names(size)
+    sdt$p <- p[paste(sdt$psu)]
+    # PPS
+    s_psu <- sample(psu, n_psu, replace = TRUE, prob = p)
+    sdt_list <- lapply(seq_len(n_psu), \(j) {
+      s_dt <- sdt[sdt$psu == s_psu[j], ]
+      s_dt$psu <- paste0(s_dt$psu, "_", j)
+      s_dt
+    })
+    sdt <- lapply(sdt_list, \(d) {
+      n_j <- nrow(d)
+      s_d <- d[sample(n_j, n_j, replace = TRUE), ]
+      s_d$p2 <- pp(n_j)
+      s_d
+    }) %>% bind_rows
+
+    sdt$w <- (1 / sdt$p) * (1 / sdt$p2)
+    sdt
+  }) %>% bind_rows %>%
+    mutate(w = w / sum(w) * nrow(.))
+}
+
+```
+
+#simulate datasets
+#number of replications is only 200 for speed
+```{r}
+nrep <- 200
+set.seed(0203)
+sdts <- mclapply(seq_len(nrep), sim_sdt, mc.cores = 20)
+length(sdts)
+mu <- mean(dt$age)
+mu
+mean(sapply(sdts, \(d) with(d, weighted.mean(age, w))))
+```
+
+***--------------------***
+Frequnetist analysis
+Naive and IPW
+***--------------------***
+```{r}
+naive <- \(sample_data) {
+  m0 <- lm(age ~ 1, data = sample_data)
+  ci <- confint(m0)
+  cvg <- inc(mu, ci)
+  e <- coef(m0) - mu
+  se <- coef(summary(m0))[2]
+  c(cvg, e, se)
+}
+
+ipw <- \(sample_data) {
+  options(survey.lonely.psu = "adjust")
+  sd0 <- svydesign(
+    id = ~ psu
+    , weights = ~ w
+    , strata = ~ str
+    , data = sample_data
+    , nest = TRUE
+  )
+  ci <- confint(svymean(~ age, sd0))
+  cvg_ipw <- inc(mu, ci)
+  e_ipw <- as.numeric(svymean(~ age, sd0)) - mu
+  se <- SE(svymean(~ age, sd0))
+  c(cvg_ipw, e_ipw, se)
+}
+
+res_naive <- sapply(sdts, naive)
+res_ipw <- mclapply(sdts, ipw, mc.cores = 20) %>% do.call("cbind", .)
+
+res_naive %>% sm
+res_ipw %>% sm
+```
+
+
+***--------------------***
+adjusted Bayesian bootstrap
+***--------------------***
+```{r}
+gen_b0 <- \(
+  sample_data
+  , nbbot = 1000
+) {
+
+  n_psu <- with(sample_data, length(unique(psu)))
+  #cluser weights
+  p_c <- with(sample_data, tapply(w, psu, mean))
+  n_c <- with(sample_data, tapply(!is.na(age), psu, sum))
+  psu_y <- with(sample_data, tapply(age, psu, mean))
+
+  yp <- sapply(seq_len(nbbot), \(r) {
+    weighted.mean(psu_y, bb(n_psu) * p_c  * n_c)
+  })
+
+  # get posterior
+  ci <- quantile(yp, c(.025, .975))
+  cvg <- inc(mu, ci)
+  e <- mean(yp) - mu
+  se <- sd(yp)
+  c(cvg, e, se)
+}
+
+set.seed(0203)
+res_pbb <- mclapply(sdts, gen_b0, mc.cores = 20) %>% do.call("cbind", .)
+
+res_naive %>% sm
+res_ipw %>% sm
+res_pbb %>% sm
+```

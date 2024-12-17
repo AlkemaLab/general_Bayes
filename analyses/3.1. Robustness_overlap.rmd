@@ -129,10 +129,10 @@ oplot <- ggplot() +
   scale_fill_manual(values = hue_pal()(4)
     , name = element_blank()
     , labels = c(
-      "Compliers"
-      , "DHS-Urban, same states"
-      , "DHS-Urban, all state"
-      , "DHS-Urban and rural, all states"
+    "Compliers (source study)"
+    , "Urban, same states (DHS)"
+    , "Urban, all state (DHS)"
+    , "Urban and rural, all states (DHS)"
     )
   )
 
